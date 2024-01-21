@@ -297,8 +297,132 @@
 ///    unsafe_function()
 /// });
 /// ```
+
+#[macro_export]
+macro_rules! rev {
+    ($rev:ident, rev) => {
+        $rev = !$rev;
+    };
+    ($rev:ident, $_:ident) => {
+
+    };
+}
+
+#[macro_export]
+macro_rules! is_rev {
+    ($rev:ident, $first_adapter:ident, $($adapter:ident), *) => {
+        rev!($rev, $first_adapter);
+        is_rev!($rev, $($adapter, ) *);
+    };
+    ($rev:ident, $first_adapter:ident) => {
+        rev!($rev, $first_adapter);
+    };
+    ($rev:ident, ) => {
+
+    };
+}
+
+#[macro_export]
+macro_rules! adapter {
+    ($inner:expr, $exhausted:ident, $outer:expr, rev()) => {
+        $inner
+    };
+    ($inner:expr, $exhausted:ident, $outer:expr, map($arg:expr)) => {
+        ($arg)($inner)
+    };
+    ($inner:expr, $exhausted:ident, $outer:expr, filter($arg:expr)) => {
+        loop {
+            if $exhausted {
+                $outer;
+            }
+            let val = $inner;
+            if ($arg)(&val) {
+                break val;
+            }
+        }
+    };
+    ($inner:expr, $exhausted:ident, $outer:expr, step_by($arg:expr)) => {
+        {
+            let mut count = $arg;
+            let val = $inner;
+            while count > 1 {
+                $inner;
+                count -= 1;
+            }
+            val
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! adapters {
+    ($inner:expr, $exhausted:ident, $outer:expr, $first_adapter:ident($($first_arg:expr), *), $($adapter:ident($($arg:expr), *), )*) => {
+        {
+            adapters!(adapter!($inner, $exhausted, $outer, $first_adapter($($first_arg), *)), $exhausted, $outer, $($adapter($($arg), *), )*)
+        }
+    };
+    ($inner:expr, $exhausted:ident, $outer:expr, ) => {
+        $inner
+    }
+}
+
+#[macro_export]
+macro_rules! next {
+    ($start:ident, $end:ident, $outer:expr, $($adapter:ident($($arg:expr), *), )*) => {
+        {
+            #[allow(unused_mut)]
+            let mut rev = false;
+            let mut __exhausted = false;
+            is_rev!(rev, $($adapter), *);
+
+            adapters!({
+            let val = if rev {
+                $end -= 1;
+                $end
+            }
+            else {
+                let val = $start;
+                $start += 1;
+                val
+            };
+            if $start == $end {
+                __exhausted = true;
+            }
+            val
+            }, __exhausted, $outer, $($adapter($($arg), *), )*)
+        }
+    };
+    ($start:ident, $end:ident, $outer:expr, ) => {
+        {
+            let val = $start;
+            $start += 1;
+            val
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! const_for {
+    ($var:pat_param in ($range:expr)$(.$adapter:ident($($arg:expr), *))* => $body:expr) => {
+        {
+            let mut __start = $range.start;
+            let mut __end = $range.end;
+            let mut __outer = false;
+            '__outer: while __start < __end {
+                let $var = $crate::next!(__start, __end, { break '__outer; }, $($adapter($($arg), *), )*);
+                {
+                    $body
+                }
+            }
+        }
+    };
+    ($var:pat_param in $range:expr => $body:expr) => {
+        $crate::const_for!($var in ($range) => $body);
+    };
+}
+
+#[macro_export]
+macro_rules! const_for2 {
     ($var:pat_param in ($range:expr).step_by($step:expr) => $body:stmt) => {
         {
             let _: usize = $step;
@@ -360,4 +484,69 @@ macro_rules! const_for {
     ($var:pat_param in $range:expr => $body:stmt) => {
         const_for!($var in ($range).step_by(1) => $body)
     };
+}
+
+#[cfg(never)]
+#[cfg(test)]
+mod test {
+    
+    #[test]
+    fn rev() {
+        let expected: Vec<u64> = (0..10).rev().collect();
+        let mut actual = Vec::new();
+        const_for2!(i in (0..10).rev() => actual.push(i));
+        assert_eq!(expected, actual);
+    }
+    
+    #[test]
+    fn map() {
+        fn f(v: u64) -> u64 {
+            v * 3 + 1
+        }
+        let expected: Vec<u64> = (0..10).map(f).collect();
+        let mut actual = Vec::new();
+        const_for2!(i in (0..10).map(f) => actual.push(i));
+        assert_eq!(expected, actual);
+    }
+    
+    #[test]
+    fn filter() {
+        fn f(v: &u64) -> bool {
+            v % 2 == 1
+        }
+        let expected: Vec<u64> = (0..10).filter(f).collect();
+        let mut actual = Vec::new();
+        const_for2!(i in (0..10).filter(f) => actual.push(i));
+        assert_eq!(expected, actual);
+    }
+    
+    #[test]
+    fn filter_exhaust() {
+        fn f(v: &u64) -> bool {
+            *v < 5
+        }
+        let expected: Vec<u64> = (0..10).filter(f).collect();
+        let mut actual = Vec::new();
+        const_for2!(i in (0..10).filter(f) => actual.push(i));
+        assert_eq!(expected, actual);
+    }
+    
+    #[test]
+    fn step_by() {
+        let expected: Vec<u64> = (0..10).step_by(2).collect();
+        let mut actual = Vec::new();
+        const_for2!(i in (0..10).step_by(2) => actual.push(i));
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn map_rev() {
+        fn f(v: u64) -> u64 {
+            v * 3 + 1
+        }
+        let expected: Vec<u64> = (0..10).map(f).rev().collect();
+        let mut actual = Vec::new();
+        const_for2!(i in (0..10).map(f).rev() => actual.push(i));
+        assert_eq!(expected, actual);
+    }
 }
